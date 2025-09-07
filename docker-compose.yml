@@ -1,0 +1,140 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    image: stacks-agents-api:latest
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Stacks/Contracts
+      STACKS_NETWORK: ${STACKS_NETWORK:-testnet}
+      AGENT_MGR_ADDR: ${AGENT_MGR_ADDR:-}
+      PAY_PROC_ADDR: ${PAY_PROC_ADDR:-}
+      RULES_ENG_ADDR: ${RULES_ENG_ADDR:-}
+      # Secrets
+      STACKS_SENDER_KEY: ${STACKS_SENDER_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      # Data stores
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-stacks}
+      # Webhooks (optional)
+      WEBHOOK_BASE: ${WEBHOOK_BASE:-}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+      - web
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        - REACT_APP_API_BASE=${REACT_APP_API_BASE:-/api}
+        - REACT_APP_WS_URL=${REACT_APP_WS_URL:-/}
+    image: stacks-agents-frontend:latest
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:5173 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+      - web
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-stacks}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:latest
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-stacks}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SCHEDULE: "0 3 * * *" # daily at 03:00
+      BACKUP_KEEP_DAYS: 7
+    volumes:
+      - db_backups:/backups
+    depends_on:
+      - db
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  nginx:
+    image: nginx:1.25-alpine
+    depends_on:
+      - api
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - certs:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
+    environment:
+      # Optionally used by templated nginx.conf; we ship a static config here
+      - NGINX_PORT=80
+    networks:
+      - web
+      - internal
+
+volumes:
+  db_data:
+  db_backups:
+  redis_data:
+  certs:
+  nginx_logs:
+
+networks:
+  web:
+  internal:

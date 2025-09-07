@@ -1,0 +1,14 @@
+{
+  "name": "stacks-agents-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "generate-keys": "node generate-keys.js",
+    "deploy": "node deploy-contracts.js"
+  },
+  "dependencies": {
+    "@stacks/network": "^6.17.0",
+    "@stacks/transactions": "^6.17.0",
+    "@stacks/wallet-sdk": "^6.13.0"
+  }
+}

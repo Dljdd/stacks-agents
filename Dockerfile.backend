@@ -1,0 +1,35 @@
+# Multi-stage build for Backend API (Node.js)
+FROM node:20-alpine AS base
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Install dependencies
+FROM base AS deps
+COPY backend/package*.json ./
+RUN npm ci --omit=dev
+
+# Build stage (if backend has TS or build step)
+FROM base AS build
+COPY backend/package*.json ./
+RUN npm ci
+COPY backend/ .
+# Uncomment if you have a build step, e.g. TypeScript
+# RUN npm run build
+
+# Runtime image
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+# Create non-root user
+RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
+
+# Copy node_modules and app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app ./
+
+# Expose port and define healthcheck
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:3000/health || exit 1
+
+USER nextjs
+CMD ["npm", "run", "start"]

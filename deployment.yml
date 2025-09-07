@@ -1,0 +1,428 @@
+# Kubernetes deployment for stacks-agents (backend, frontend, db, redis, nginx)
+# Apply with: kubectl apply -f deployment.yml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stacks-agents
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: stacks-secrets
+  namespace: stacks-agents
+ type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "postgres"
+  JWT_SECRET: "change-me"
+  STACKS_SENDER_KEY: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stacks-config
+  namespace: stacks-agents
+ data:
+  STACKS_NETWORK: "testnet"
+  AGENT_MGR_ADDR: ""
+  PAY_PROC_ADDR: ""
+  RULES_ENG_ADDR: ""
+  POSTGRES_DB: "stacks"
+  POSTGRES_USER: "postgres"
+  REDIS_URL: "redis://redis:6379/0"
+  DATABASE_URL: "postgres://postgres:$(POSTGRES_PASSWORD)@postgres:5432/stacks"
+  NODE_ENV: "production"
+  PORT: "3000"
+  WEBHOOK_BASE: ""
+  WEBHOOK_TOKEN: ""
+  REACT_APP_API_BASE: "/api"
+  REACT_APP_WS_URL: "/"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: stacks-agents
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  namespace: stacks-agents
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: stacks-agents
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: POSTGRES_DB } }
+            - name: POSTGRES_USER
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: stacks-secrets, key: POSTGRES_PASSWORD } }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: postgres-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: stacks-agents
+spec:
+  selector: { app: postgres }
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: stacks-agents
+spec:
+  schedule: "0 3 * * *"  # daily at 03:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: prodrigestivill/postgres-backup-local:latest
+              env:
+                - name: POSTGRES_HOST
+                  value: postgres
+                - name: POSTGRES_DB
+                  valueFrom: { configMapKeyRef: { name: stacks-config, key: POSTGRES_DB } }
+                - name: POSTGRES_USER
+                  valueFrom: { configMapKeyRef: { name: stacks-config, key: POSTGRES_USER } }
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: stacks-secrets, key: POSTGRES_PASSWORD } }
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: postgres-backups }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: stacks-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: stacks-agents
+spec:
+  selector: { app: redis }
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: stacks-agents
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api }
+    spec:
+      containers:
+        - name: api
+          image: stacks-agents-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: NODE_ENV } }
+            - name: PORT
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: PORT } }
+            - name: STACKS_NETWORK
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: STACKS_NETWORK } }
+            - name: AGENT_MGR_ADDR
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: AGENT_MGR_ADDR } }
+            - name: PAY_PROC_ADDR
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: PAY_PROC_ADDR } }
+            - name: RULES_ENG_ADDR
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: RULES_ENG_ADDR } }
+            - name: REDIS_URL
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: REDIS_URL } }
+            - name: DATABASE_URL
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: DATABASE_URL } }
+            - name: WEBHOOK_BASE
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: WEBHOOK_BASE } }
+            - name: WEBHOOK_TOKEN
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: WEBHOOK_TOKEN } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: stacks-secrets, key: JWT_SECRET } }
+            - name: STACKS_SENDER_KEY
+              valueFrom: { secretKeyRef: { name: stacks-secrets, key: STACKS_SENDER_KEY } }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: stacks-agents
+spec:
+  selector: { app: api }
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: stacks-agents
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: frontend }
+  template:
+    metadata:
+      labels: { app: frontend }
+    spec:
+      containers:
+        - name: frontend
+          image: stacks-agents-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5173
+          env:
+            - name: REACT_APP_API_BASE
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: REACT_APP_API_BASE } }
+            - name: REACT_APP_WS_URL
+              valueFrom: { configMapKeyRef: { name: stacks-config, key: REACT_APP_WS_URL } }
+          readinessProbe:
+            httpGet: { path: /, port: 5173 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 5173 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "300m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: stacks-agents
+spec:
+  selector: { app: frontend }
+  ports:
+    - name: http
+      port: 5173
+      targetPort: 5173
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-conf
+  namespace: stacks-agents
+ data:
+  nginx.conf: |
+    user  nginx;
+    worker_processes  auto;
+    error_log  /var/log/nginx/error.log warn;
+    pid        /var/run/nginx.pid;
+    events { worker_connections 1024; }
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+      sendfile on; tcp_nopush on; tcp_nodelay on;
+      keepalive_timeout 65;
+      gzip on;
+      gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+      upstream api_upstream { server api:3000; keepalive 32; }
+      upstream fe_upstream { server frontend:5173; keepalive 32; }
+      map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+      server {
+        listen 80;
+        return 301 https://$host$request_uri;
+      }
+      server {
+        listen 443 ssl http2;
+        ssl_certificate     /etc/nginx/certs/tls.crt;
+        ssl_certificate_key /etc/nginx/certs/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        location = /nginx-health { return 200 'ok'; add_header Content-Type text/plain; }
+        location /api/ {
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_pass http://api_upstream/api/;
+        }
+        location / { proxy_pass http://fe_upstream/; }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: stacks-agents
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: nginx }
+  template:
+    metadata:
+      labels: { app: nginx }
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: tls
+              mountPath: /etc/nginx/certs
+          livenessProbe:
+            httpGet: { path: /nginx-health, port: 80 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /nginx-health, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-conf
+            items:
+              - key: nginx.conf
+                path: nginx.conf
+        - name: tls
+          secret:
+            secretName: nginx-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: stacks-agents
+spec:
+  type: LoadBalancer
+  selector: { app: nginx }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: https
+      port: 443
+      targetPort: 443
+---
+# Optionally, Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-hpa
+  namespace: stacks-agents
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

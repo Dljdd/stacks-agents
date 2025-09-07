@@ -1,0 +1,107 @@
+agentic-payments-stacks/
+├── contracts/                          # Clarity Smart Contracts
+│   ├── agent-manager.clar              # Agent authorization & management
+│   ├── payment-processor.clar          # Core payment logic
+│   ├── rules-engine.clar              # Payment rules and validation
+│   ├── audit-logger.clar              # Transaction logging
+│   └── multi-sig-wallet.clar          # Multi-signature functionality
+│
+├── backend/                           # Node.js/Python Backend Services
+│   ├── src/
+│   │   ├── services/
+│   │   │   ├── agent-orchestrator.js   # Agent coordination service
+│   │   │   ├── payment-service.js      # Payment processing logic
+│   │   │   ├── auth-service.js         # Authentication & authorization
+│   │   │   ├── blockchain-service.js   # Stacks blockchain integration
+│   │   │   └── notification-service.js # Alerts and notifications
+│   │   ├── controllers/
+│   │   │   ├── agent-controller.js     # Agent management endpoints
+│   │   │   ├── payment-controller.js   # Payment endpoints
+│   │   │   ├── user-controller.js      # User management endpoints
+│   │   │   └── analytics-controller.js # Analytics endpoints
+│   │   ├── middleware/
+│   │   │   ├── auth-middleware.js      # Authentication middleware
+│   │   │   ├── rate-limiter.js         # Rate limiting
+│   │   │   └── validator.js            # Input validation
+│   │   ├── models/
+│   │   │   ├── User.js                 # User data model
+│   │   │   ├── Agent.js                # Agent data model
+│   │   │   ├── Payment.js              # Payment data model
+│   │   │   └── AuditLog.js             # Audit log model
+│   │   ├── config/
+│   │   │   ├── database.js             # Database configuration
+│   │   │   ├── stacks.js               # Stacks network config
+│   │   │   └── security.js             # Security settings
+│   │   └── utils/
+│   │       ├── encryption.js           # Encryption utilities
+│   │       ├── stacks-helper.js        # Stacks integration helpers
+│   │       └── validation.js           # Validation utilities
+│   ├── package.json
+│   └── server.js                       # Main server file
+│
+├── frontend/                          # React Frontend Application
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Dashboard/
+│   │   │   │   ├── UserDashboard.jsx   # Main user dashboard
+│   │   │   │   ├── AgentCard.jsx       # Individual agent display
+│   │   │   │   └── PaymentHistory.jsx  # Payment history component
+│   │   │   ├── AgentManagement/
+│   │   │   │   ├── AgentList.jsx       # List of user agents
+│   │   │   │   ├── CreateAgent.jsx     # Agent creation form
+│   │   │   │   ├── AgentSettings.jsx   # Agent configuration
+│   │   │   │   └── PermissionsPanel.jsx # Permission management
+│   │   │   ├── Payments/
+│   │   │   │   ├── PaymentRules.jsx    # Payment rule configuration
+│   │   │   │   ├── TransactionLog.jsx  # Real-time transaction log
+│   │   │   │   └── PaymentLimits.jsx   # Spending limits interface
+│   │   │   ├── Analytics/
+│   │   │   │   ├── SpendingChart.jsx   # Spending visualization
+│   │   │   │   ├── AgentActivity.jsx   # Agent activity tracking
+│   │   │   │   └── ReportsPanel.jsx    # Financial reports
+│   │   │   └── Common/
+│   │   │       ├── Header.jsx          # Navigation header
+│   │   │       ├── Sidebar.jsx         # Navigation sidebar
+│   │   │       ├── Modal.jsx           # Reusable modal component
+│   │   │       └── LoadingSpinner.jsx  # Loading indicator
+│   │   ├── hooks/
+│   │   │   ├── useStacks.js            # Stacks blockchain integration
+│   │   │   ├── useAuth.js              # Authentication hook
+│   │   │   ├── useAgents.js            # Agent management hook
+│   │   │   └── usePayments.js          # Payment operations hook
+│   │   ├── services/
+│   │   │   ├── api.js                  # API service layer
+│   │   │   ├── stacks-service.js       # Stacks.js integration
+│   │   │   └── websocket.js            # Real-time updates
+│   │   ├── context/
+│   │   │   ├── AuthContext.jsx         # Authentication context
+│   │   │   └── AgentContext.jsx        # Agent state context
+│   │   ├── utils/
+│   │   │   ├── formatters.js           # Data formatting utilities
+│   │   │   └── validators.js           # Form validation
+│   │   └── styles/
+│   │       ├── globals.css             # Global styles
+│   │       └── components.css          # Component-specific styles
+│   ├── package.json
+│   └── public/
+│       └── index.html
+│
+├── agents/                            # AI Agent Implementation
+│   ├── payment-agent.py               # Core payment agent logic
+│   ├── fraud-detection-agent.py       # Fraud detection algorithms
+│   ├── analytics-agent.py             # Analytics and reporting
+│   └── notification-agent.py          # Alert and notification system
+│
+├── database/
+│   ├── migrations/                    # Database migrations
+│   └── seeds/                         # Initial data seeds
+│
+├── config/
+│   ├── docker-compose.yml             # Docker configuration
+│   ├── nginx.conf                     # Nginx configuration
+│   └── deployment.yml                 # Kubernetes deployment config
+│
+└── docs/
+    ├── API.md                         # API documentation
+    ├── DEPLOYMENT.md                  # Deployment guide
+    └── ARCHITECTURE.md                # Architecture documentation

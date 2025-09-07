@@ -1,0 +1,32 @@
+{
+  "payments": [
+    {
+      "ts": 1756729717782,
+      "agentId": "SPOWNER",
+      "recipient": "SP2C2K8T3Z7XXYYZZ",
+      "amount": 1000000,
+      "jobId": "job-123"
+    },
+    {
+      "ts": 1756729717782,
+      "agentId": "SPOWNER",
+      "recipient": "SP2C2K8T3Z7XXYYZZ",
+      "amount": 200000,
+      "jobId": "job-123"
+    },
+    {
+      "ts": 1756729664701,
+      "agentId": "SPOWNER",
+      "recipient": "unknown",
+      "amount": 1000000,
+      "jobId": "job-123"
+    },
+    {
+      "ts": 1756729664700,
+      "agentId": "SPOWNER",
+      "recipient": "unknown",
+      "amount": 200000,
+      "jobId": "job-123"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# Multi-stage build for Frontend App (React)
+FROM node:20-alpine AS build
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Install deps and build
+COPY frontend/package*.json ./
+RUN npm ci
+ARG REACT_APP_API_BASE=/api
+ARG REACT_APP_WS_URL=/
+ENV REACT_APP_API_BASE=$REACT_APP_API_BASE
+ENV REACT_APP_WS_URL=$REACT_APP_WS_URL
+COPY frontend/ .
+RUN npm run build
+
+# Lightweight static file server on 5173 (to align with docker-compose)
+FROM node:20-alpine AS runner
+WORKDIR /app
+RUN npm i -g serve@14.2.1
+COPY --from=build /app/build ./build
+EXPOSE 5173
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:5173 || exit 1
+CMD ["serve", "-s", "build", "-l", "5173"]
