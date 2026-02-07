@@ -1,68 +1,138 @@
-import React, { useState, useEffect } from 'react';
-import { getUserSession, isSignedIn, connectWithLeatherFirst, getAgentAddress } from '../utils/walletSession';
+import React, { useEffect, useMemo, useState } from 'react'
+import { Wallet, LogOut, Copy, Check } from 'lucide-react'
+import { AppConfig, UserSession, showConnect } from '@stacks/connect'
 
-const WalletConnect = ({ onWalletConnected, onWalletDisconnected }) => {
-  const [userData, setUserData] = useState(null);
-  const [isConnected, setIsConnected] = useState(false);
+const NETWORK = 'testnet'
+const HIRO_API = NETWORK === 'testnet' ? 'https://api.testnet.hiro.so' : 'https://api.hiro.so'
+
+export default function WalletConnect({ onWalletConnected, onWalletDisconnected }) {
+  const [isConnected, setIsConnected] = useState(false)
+  const [address, setAddress] = useState('')
+  const [balance, setBalance] = useState('0')
+  const [copied, setCopied] = useState(false)
+
+  const userSession = useMemo(() => {
+    const appConfig = new AppConfig(['store_write', 'publish_data'])
+    return new UserSession({ appConfig })
+  }, [])
 
   useEffect(() => {
-    const us = getUserSession();
-    if (us.isSignInPending()) {
-      us.handlePendingSignIn().then((ud) => {
-        setUserData(ud);
-        setIsConnected(true);
-        onWalletConnected && onWalletConnected(ud);
-      });
-    } else if (isSignedIn()) {
-      const ud = us.loadUserData();
-      setUserData(ud);
-      setIsConnected(true);
-      onWalletConnected && onWalletConnected(ud);
+    if (userSession.isUserSignedIn()) {
+      const data = userSession.loadUserData()
+      const stxAddress = data.profile?.stxAddress?.[NETWORK]
+      if (stxAddress) {
+        setIsConnected(true)
+        setAddress(stxAddress)
+        fetchBalance(stxAddress)
+      }
     }
-  }, [onWalletConnected]);
+  }, [userSession])
 
-  const handleConnect = async () => {
-    const result = await connectWithLeatherFirst({ network: 'testnet' });
-    const us = getUserSession();
-    const ud = us.loadUserData?.() || null;
-    setUserData(ud);
-    setIsConnected(Boolean(result.ok || ud));
-    if (result.ok || ud) onWalletConnected && onWalletConnected(ud || { address: result.address });
-  };
+  async function fetchBalance(stxAddress) {
+    try {
+      const res = await fetch(`${HIRO_API}/extended/v1/address/${stxAddress}/balances`)
+      const json = await res.json()
+      const micro = json.stx?.balance ? Number(json.stx.balance) : 0
+      const stx = micro / 1_000_000
+      setBalance(stx.toLocaleString(undefined, { maximumFractionDigits: 6 }))
+    } catch (e) {
+      console.error('Balance fetch failed', e)
+    }
+  }
 
-  const disconnectWallet = () => {
-    const us = getUserSession();
-    us.signUserOut('/');
-    setUserData(null);
-    setIsConnected(false);
-    onWalletDisconnected();
-  };
+  const handleConnect = () => {
+    showConnect({
+      userSession,
+      appDetails: {
+        name: 'AgentPay',
+        icon: window.location.origin + '/neon-logo.svg',
+      },
+      onFinish: () => {
+        const data = userSession.loadUserData()
+        const stxAddress = data.profile?.stxAddress?.[NETWORK]
+        if (stxAddress) {
+          setIsConnected(true)
+          setAddress(stxAddress)
+          fetchBalance(stxAddress)
+          onWalletConnected?.({ address: stxAddress })
+        }
+      },
+      onCancel: () => {},
+    })
+  }
 
-  const getShortAddress = (address) => {
-    if (!address) return '';
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
-  };
+  const handleDisconnect = () => {
+    try {
+      userSession.signUserOut()
+    } catch {}
+    setIsConnected(false)
+    setAddress('')
+    setBalance('0')
+    onWalletDisconnected?.()
+  }
+
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(address)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      console.error('Failed to copy address:', error)
+    }
+  }
+
+  const formatAddress = (addr) => (addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '')
+
+  if (!isConnected) {
+    return (
+      <button
+        onClick={handleConnect}
+        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-blue-500/25 font-medium"
+      >
+        <Wallet className="w-4 h-4" />
+        Connect Wallet
+      </button>
+    )
+  }
 
   return (
-    <div className="wallet-connect">
-      {!isConnected ? (
-        <button onClick={handleConnect} className="btn btn-primary wallet-btn">
-          🔗 Connect Leather Wallet
-        </button>
-      ) : (
-        <div className="wallet-connected">
-          <div className="wallet-info">
-            <span className="wallet-address">
-              🟢 {getShortAddress(getAgentAddress({ network: 'testnet' }))}
-            </span>
-            <button onClick={disconnectWallet} className="btn btn-secondary btn-sm">
-              Disconnect
-            </button>
-          </div>
+    <div className="bg-slate-800/90 backdrop-blur-sm border border-slate-700/50 rounded-xl p-4 min-w-[220px]">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-emerald-400 rounded-full"></div>
+          <span className="text-emerald-400 text-sm font-medium">Connected</span>
         </div>
-      )}
-    </div>
-  );
-};
+        <button
+          onClick={handleDisconnect}
+          className="p-1 text-slate-400 hover:text-red-400 hover:bg-slate-700/50 rounded-lg transition-colors"
+          title="Disconnect"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
+      </div>
 
-export default WalletConnect;
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400 text-xs">Address:</span>
+          <button
+            onClick={copyAddress}
+            className="flex items-center gap-1 text-slate-300 hover:text-white text-xs transition-colors"
+            title="Copy address"
+          >
+            {formatAddress(address)}
+            {copied ? (
+              <Check className="w-3 h-3 text-emerald-400" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400 text-xs">Balance:</span>
+          <span className="text-white font-semibold text-sm">{balance} STX</span>
+        </div>
+      </div>
+    </div>
+  )
+}

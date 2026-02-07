@@ -7,8 +7,9 @@ import Analytics from './components/Analytics';
 import Contacts from './components/Contacts';
 import Chatbot from './components/Chatbot';
 import ErrorBoundary from './components/ErrorBoundary';
-import WalletConnect from './components/WalletConnect';
 import './styles.css';
+import Sidebar from './components/layout/Sidebar';
+import { Button } from './components/retroui/Button';
 
 const API_BASE = 'http://localhost:3001/api'
 const WS_URL = 'ws://localhost:3001/ws/updates'
@@ -57,6 +58,7 @@ export default function App() {
   const [token, setToken] = useState('test')
   const [activeTab, setActiveTab] = useState('dashboard')
   const [notifications, setNotifications] = useState([])
+  const [sidebarWidth, setSidebarWidth] = useState(240)
   const api = useApi(token)
 
   // WebSocket for real-time updates with error handling
@@ -86,40 +88,15 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <div className="logo">🤖 Stacks AI Payment Agents</div>
-          <div className="wallet-placeholder">
-            <WalletConnect 
-              onWalletConnected={() => {
-                if (process.env.NODE_ENV === 'development') {
-                  if (!window.__wallet_connected_logged) {
-                    console.info('Wallet connected')
-                    window.__wallet_connected_logged = true
-                  }
-                }
-              }}
-              onWalletDisconnected={() => {
-                if (process.env.NODE_ENV === 'development') {
-                  console.info('Wallet disconnected')
-                  window.__wallet_connected_logged = false
-                }
-              }}
-            />
-          </div>
-          <nav className="nav-tabs">
-            <button className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>Dashboard</button>
-            <button className={`nav-tab ${activeTab === 'agents' ? 'active' : ''}`} onClick={() => setActiveTab('agents')}>Agents</button>
-            <button className={`nav-tab ${activeTab === 'payments' ? 'active' : ''}`} onClick={() => setActiveTab('payments')}>Payments</button>
-            <button className={`nav-tab ${activeTab === 'analytics' ? 'active' : ''}`} onClick={() => setActiveTab('analytics')}>Analytics</button>
-            <button className={`nav-tab ${activeTab === 'contacts' ? 'active' : ''}`} onClick={() => setActiveTab('contacts')}>Contacts</button>
-            <button className={`nav-tab ${activeTab === 'chatbot' ? 'active' : ''}`} onClick={() => setActiveTab('chatbot')}>💬 Chatbot</button>
-          </nav>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      <Sidebar activeTab={activeTab} onSelect={setActiveTab} onWidthChange={setSidebarWidth} />
+      
+      {/* WalletConnect moved into Sidebar footer */}
 
-      <main className="main-content">
+      <main
+        className="min-h-screen"
+        style={{ marginLeft: sidebarWidth }}
+      >
         <ErrorBoundary>
           {renderActiveTab()}
         </ErrorBoundary>
@@ -127,4 +104,3 @@ export default function App() {
     </div>
   )
 }
-

@@ -223,6 +223,18 @@ app.post('/api/payments/process', requireAuth, async (req, res) => {
       return res.status(404).json({ error: { code: 'not_found', message: 'agent not found' } });
     }
 
+    // Category enforcement (server-side)
+    // Allow typical categories like groceries/electronics, but block gambling-related terms
+    const BLOCKED = ['gambl', 'casino', 'bet', 'wager'];
+    const categoryText = `${(memo || '')} ${(metadata.category || '')}`.toLowerCase();
+    const isBlocked = BLOCKED.some((k) => categoryText.includes(k));
+    if (isBlocked) {
+      return res.status(400).json({ 
+        error: { code: 'blocked_category', message: 'Payment category blocked: gambling' },
+        decision: { authorize: false, risk: 0.95, reason: 'blocked_category' }
+      });
+    }
+
     // For demo: simulate payment validation
     console.log(`Would validate payment rules for agent ${agentId}, amount ${amount}`);
     const isValid = amount <= (agent.limits.daily || 2000000); // Simple validation

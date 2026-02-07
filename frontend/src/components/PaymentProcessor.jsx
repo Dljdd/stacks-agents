@@ -1,394 +1,464 @@
-import React, { useState, useEffect } from 'react'
-import { openContractCall } from '@stacks/connect'
-import { principalCV, uintCV, someCV, noneCV, stringAsciiCV, stringUtf8CV, cvToHex } from '@stacks/transactions'
-import { signExecutePayment } from '../utils/stacksWallet'
-import { isSignedIn, connectWallet, getUserSession } from '../utils/walletSession'
+import React, { useEffect, useMemo, useState } from 'react'
+import { CreditCard, Send, Clock, CheckCircle, AlertCircle, DollarSign, Users, TrendingUp } from 'lucide-react'
+import { AppConfig, UserSession, showConnect, openContractCall } from '@stacks/connect'
+import { principalCV, uintCV, noneCV, someCV, stringUtf8CV } from '@stacks/transactions'
 
 export default function PaymentProcessor({ api }) {
-  const [agents, setAgents] = useState([])
-  const [payments, setPayments] = useState([])
-  const [selectedAgent, setSelectedAgent] = useState('')
-  const [lastSigningPayload, setLastSigningPayload] = useState(null)
-  const [contracts, setContracts] = useState({ paymentProcessor: null })
-  const [contractsReady, setContractsReady] = useState(false)
-  const [paymentForm, setPaymentForm] = useState({
-    amount: '',
+  const [paymentMode, setPaymentMode] = useState('structured')
+  const [formData, setFormData] = useState({
     recipient: '',
+    amount: '',
     memo: '',
-    naturalLanguage: ''
+    agent: ''
   })
-  const [useNaturalLanguage, setUseNaturalLanguage] = useState(false)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    loadAgents()
-    loadContracts()
-  }, [])
-
-  useEffect(() => {
-    loadPayments()
-  }, [selectedAgent])
-
-  async function loadAgents() {
-    try {
-      const response = await api.get('/agents/list')
-      setAgents(response.data.items || [])
-      if (response.data.items?.length > 0 && !selectedAgent) {
-        setSelectedAgent(response.data.items[0].id)
-      }
-    } catch (error) {
-      console.error('Failed to load agents:', error)
+  const [naturalLanguageInput, setNaturalLanguageInput] = useState('')
+  const [processing, setProcessing] = useState(false)
+  const [txInfo, setTxInfo] = useState({ status: null, txId: null, error: null })
+  const [recentPayments, setRecentPayments] = useState([
+    {
+      id: 1,
+      recipient: 'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7',
+      amount: '150 STX',
+      status: 'completed',
+      timestamp: '2 min ago',
+      memo: 'Payment for services'
+    },
+    {
+      id: 2,
+      recipient: 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE',
+      amount: '75 STX',
+      status: 'pending',
+      timestamp: '5 min ago',
+      memo: 'Monthly subscription'
+    },
+    {
+      id: 3,
+      recipient: 'SP1K1A1PMGW2BQ2N4B2N4B2N4B2N4B2N4B2N4B2N',
+      amount: '300 STX',
+      status: 'failed',
+      timestamp: '10 min ago',
+      memo: 'Refund payment'
     }
+  ])
+
+  const dismissToast = () => setTxInfo({ status: null, txId: null, error: null })
+
+  // Leather session
+  const userSession = useMemo(() => new UserSession({ appConfig: new AppConfig(['store_write', 'publish_data']) }), [])
+
+  useEffect(() => {
+    if (userSession.isUserSignedIn()) {
+      const data = userSession.loadUserData()
+      const addr = data.profile?.stxAddress?.testnet || data.profile?.stxAddress?.mainnet
+      if (addr && !formData.agent) setFormData((f) => ({ ...f, agent: addr }))
+    }
+  }, [userSession])
+
+  // Explorer/confirmation helpers
+  const HIRO_API = 'https://api.testnet.hiro.so'
+  const EXPLORER_BASE = 'https://explorer.hiro.so/tx/'
+
+  // Category guard helpers
+  const ALLOWED = ['grocery', 'groceries', 'electronics']
+  const BLOCKED = ['gambl', 'casino', 'bet', 'wager']
+  function detectCategory(text = '') {
+    const t = (text || '').toLowerCase()
+    const isBlocked = BLOCKED.some(k => t.includes(k))
+    const isAllowed = ALLOWED.some(k => t.includes(k))
+    return { isBlocked, isAllowed }
   }
 
-  async function loadContracts() {
+  // --- Refresh payments history ---
+  async function refreshPayments() {
     try {
-      const res = await api.get('/contracts/info')
-      const data = res.data || {}
-      setContracts(data)
-      setContractsReady(Boolean(data.paymentProcessor))
-      return data
+      const agentId = formData.agent
+      const params = agentId ? { params: { agentId } } : undefined
+      const res = await api.get('/payments/history', params)
+      const items = res.data?.items || []
+      // Map into UI-friendly objects
+      const mapped = items.slice(0, 10).map((p) => ({
+        id: p.id || `${p.txId || Math.random()}`,
+        recipient: p.recipient,
+        amount: `${(p.amount || 0) / 1_000_000} STX`,
+        status: p.status === 'success' ? 'completed' : (p.status || 'pending'),
+        timestamp: p.createdAt ? new Date(p.createdAt).toLocaleTimeString() : '',
+        memo: p.memo || ''
+      }))
+      setRecentPayments(mapped)
     } catch (e) {
-      console.error('Failed to load contracts info:', e)
-      setContractsReady(false)
-      return {}
+      console.warn('Failed to refresh payments', e)
     }
   }
 
-  async function loadPayments() {
+  // --- Transaction confirmation polling ---
+  async function pollTxConfirmation(txId) {
     try {
-      const query = selectedAgent ? `/payments/history?agentId=${encodeURIComponent(selectedAgent)}&limit=20` : '/payments/history?limit=20'
-      const response = await api.get(query)
-      setPayments(response.data.items || [])
-    } catch (error) {
-      console.error('Failed to load payments:', error)
-    }
-  }
-
-  async function processPayment(e) {
-    e.preventDefault()
-    console.log('[Payments] Submit clicked')
-    if (!selectedAgent) {
-      alert('Please select an agent')
-      return
-    }
-    if (!paymentForm.recipient || !paymentForm.recipient.startsWith('ST')) {
-      alert('Please enter a valid recipient Stacks address (starts with ST...)')
-      return
-    }
-    if (!contracts.paymentProcessor) {
-      alert('Contracts not loaded yet. Please wait a moment and try again.')
-      return
-    }
-
-    setLoading(true)
-    try {
-      // Ensure wallet provider/session is present before attempting popup
-      const hasWallet = typeof window !== 'undefined' && (window.StacksProvider || window.LeatherProvider)
-      if (!hasWallet || !isSignedIn()) {
-        // Prompt connect flow; browser popup must be from this click context
-        const connected = await connectWallet({})
-        if (connected) {
-          alert('Wallet connected. Please click "Process Payment" again to sign the transaction.')
-        }
-        setLoading(false)
-        return
-      }
-
-      // Build signing payload client-side and open wallet immediately on submit
-      // HOTFIX: override wrong contract id coming from backend if detected
-      const FALLBACK_CONTRACT_ID = 'ST23Z1N1XD66CM151FM7NFPJ1VXPE6RT51XH4CG7.payment-processor-1'
-      let contractId = contracts.paymentProcessor
-      if (!contractId || contractId.startsWith('ST3CSS0') || contractId.endsWith('.payment-processor')) {
-        console.warn('[Payments] Using fallback contract id:', FALLBACK_CONTRACT_ID)
-        contractId = FALLBACK_CONTRACT_ID
-      }
-      if (!contractId) {
-        throw new Error('Payment Processor contract ID unavailable')
-      }
-
-      const amountNum = Number(paymentForm.amount)
-      if (!Number.isFinite(amountNum) || !Number.isInteger(amountNum) || amountNum <= 0) {
-        alert('Amount must be a positive integer in microSTX (no decimals).')
-        return
-      }
-      const amount = amountNum
-      const [contractAddress, contractName] = String(contractId).split('.')
-      console.log('[Payments] About to open wallet', { contractAddress, contractName, amount, selectedAgent, recipient: paymentForm.recipient })
-
-      // Prefer Leather direct provider API when available to bypass any popup blockers
-      const provider = typeof window !== 'undefined' && (window.LeatherProvider || window.StacksProvider)
-      if (provider && typeof provider.request === 'function') {
-        try {
-          console.log('[Payments] Using LeatherProvider.request')
-          const argsHex = [
-            cvToHex(principalCV(selectedAgent)),
-            cvToHex(principalCV(paymentForm.recipient)),
-            cvToHex(uintCV(amount)),
-            cvToHex(paymentForm.memo ? stringUtf8CV(String(paymentForm.memo)) : stringUtf8CV('')),
-          ]
-          const resp = await provider.request('stx_callContract', {
-            contract: `${contractAddress}.${contractName}`,
-            functionName: 'execute-payment',
-            functionArgs: argsHex,
-            postConditionMode: 'allow',
-            postConditions: [],
-          })
-          
-          const txId = resp?.result?.txid || resp?.txid || resp?.result?.txId || resp?.txId
-          if (txId) {
-            alert('Payment submitted! TXID: ' + txId)
-            setTimeout(loadPayments, 4000)
-            setPaymentForm({ amount: '', recipient: '', memo: '', naturalLanguage: '' })
-            setLoading(false)
+      let attempts = 0
+      const maxAttempts = 60 // ~60s
+      while (attempts < maxAttempts) {
+        attempts++
+        const res = await fetch(`${HIRO_API}/extended/v1/tx/${txId}`)
+        if (res.ok) {
+          const json = await res.json()
+          const status = json?.tx_status || json?.status
+          if (status === 'success') {
+            setTxInfo({ status: 'success', txId, error: null })
+            // Refresh recent payments from backend
+            await refreshPayments()
             return
           }
-          console.log('[Payments] LeatherProvider request sent, no txId returned')
-          setTimeout(loadPayments, 4000)
-          setPaymentForm({ amount: '', recipient: '', memo: '', naturalLanguage: '' })
-          setLoading(false)
-          return
-        } catch (err) {
-          console.warn('[Payments] LeatherProvider.request failed, falling back to openContractCall', err)
+          if (status === 'abort_by_response' || status === 'failed') {
+            setTxInfo({ status: 'failed', txId, error: json?.tx_result?.repr || 'Transaction failed' })
+            return
+          }
         }
+        await new Promise(r => setTimeout(r, 1000))
       }
-
-      // Fallback: call openContractCall directly from the click handler per best practice
-      openContractCall({
-        contractAddress,
-        contractName,
-        functionName: 'execute-payment',
-        functionArgs: [
-          principalCV(selectedAgent),
-          principalCV(paymentForm.recipient),
-          uintCV(amount),
-          paymentForm.memo ? someCV(stringAsciiCV(String(paymentForm.memo))) : noneCV(),
-        ],
-        // Use plain network object to avoid Vite bundling issues with @stacks/network
-        network: { coreApiUrl: 'https://api.testnet.hiro.so' },
-        userSession: getUserSession(),
-        appDetails: { name: 'Stacks AI Payment Agents' },
-        onFinish: (data) => {
-          console.log('Wallet submitted tx:', data)
-          alert('Transaction submitted! TXID: ' + (data?.txId || 'unknown'))
-          setTimeout(loadPayments, 4000)
-        },
-        onCancel: () => {
-          console.warn('User cancelled wallet signing')
-        }
-      })
-      console.log('[Payments] openContractCall invoked')
-
-      // Reset form
-      setPaymentForm({
-        amount: '',
-        recipient: '',
-        memo: '',
-        naturalLanguage: ''
-      })
-      
-      // No pre-submit modals. All feedback handled in onFinish/onCancel above.
-    } catch (error) {
-      console.error('Payment failed:', error)
-      alert('Payment failed: ' + (error.response?.data?.error?.message || error.message))
-    } finally {
-      setLoading(false)
+      setTxInfo((t) => ({ ...t, status: 'pending', error: null }))
+    } catch (e) {
+      setTxInfo({ status: 'error', txId, error: e?.message || 'Unable to confirm transaction' })
     }
   }
 
-  function getStatusColor(status) {
+  const handleStructuredSubmit = async (e) => {
+    e.preventDefault()
+    setProcessing(true)
+    
+    try {
+      // Ensure wallet is connected
+      if (!userSession.isUserSignedIn()) {
+        await new Promise((resolve) =>
+          showConnect({ userSession, appDetails: { name: 'AgentPay', icon: window.location.origin + '/neon-logo.svg' }, onFinish: resolve, onCancel: resolve })
+        )
+      }
+
+      const agentId = formData.agent
+      const recipient = formData.recipient.trim()
+      const amountStx = parseFloat(formData.amount)
+      if (!agentId || !recipient || !amountStx || amountStx <= 0) throw new Error('Please fill all required fields')
+
+      // Category policy check from memo
+      const { isBlocked } = detectCategory(formData.memo)
+      if (isBlocked) {
+        setTxInfo({ status: 'error', txId: null, error: 'Blocked category: gambling' })
+        return
+      }
+
+      const amountMicro = Math.round(amountStx * 1_000_000)
+
+      // 1) Ask backend for contract payload (validation + contract routing)
+      const res = await api.post(
+        '/payments/process',
+        {
+          agentId,
+          recipient,
+          amount: amountMicro,
+          memo: formData.memo || null,
+        },
+        { headers: { Authorization: 'Bearer dev' } }
+      )
+
+      const { signingPayload } = res.data || {}
+      if (!signingPayload?.contractId || !signingPayload?.functionName) throw new Error('Invalid signing payload')
+
+      // 2) Prepare contract call for Leather
+      const [contractAddress, contractName] = signingPayload.contractId.split('.')
+      const [argAgent, argRecipient, argAmount, argMemo] = signingPayload.args
+
+      const functionArgs = [
+        principalCV(argAgent || agentId),
+        principalCV(argRecipient || recipient),
+        uintCV(argAmount || amountMicro),
+        argMemo ? someCV(stringUtf8CV(argMemo)) : noneCV(),
+      ]
+
+      await openContractCall({
+        userSession,
+        contractAddress,
+        contractName,
+        functionName: signingPayload.functionName,
+        functionArgs,
+        appDetails: { name: 'AgentPay', icon: window.location.origin + '/neon-logo.svg' },
+        onFinish: (data) => {
+          // data.txId for mainnet/testnet; fall back to data.txId if available
+          const txId = data?.txId || data?.transactionId || null
+          setTxInfo({ status: 'submitted', txId, error: null })
+          if (txId) pollTxConfirmation(txId)
+        },
+      })
+
+      setFormData({ recipient: '', amount: '', memo: '', agent: agentId })
+    } catch (error) {
+      console.error('Payment failed:', error)
+      setTxInfo({ status: 'error', txId: null, error: error?.message || 'Payment failed' })
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const handleNaturalLanguageSubmit = async (e) => {
+    e.preventDefault()
+    setProcessing(true)
+    
+    try {
+      // Very basic parse: "send <amount> STX to <address> [memo <text>]"
+      const match = naturalLanguageInput.match(/send\s+(\d+(?:\.\d+)?)\s*stx\s+to\s+([SP][A-Z0-9]+)(?:.*memo\s+(.+))?/i)
+      if (!match) throw new Error('Could not parse. Try: "Send 100 STX to SPxxxxx memo Lunch"')
+      const amountStx = parseFloat(match[1])
+      const recipient = match[2]
+      const memo = match[3]?.trim() || null
+
+      // Category policy from natural language
+      const { isBlocked } = detectCategory(naturalLanguageInput)
+      if (isBlocked) {
+        setTxInfo({ status: 'error', txId: null, error: 'Blocked category: gambling' })
+        setNaturalLanguageInput('')
+        return
+      }
+
+      setFormData((f) => ({ ...f, amount: String(amountStx), recipient, memo: memo || '' }))
+      await handleStructuredSubmit({ preventDefault: () => {} })
+      setNaturalLanguageInput('')
+    } catch (error) {
+      console.error('Payment failed:', error)
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const getStatusIcon = (status) => {
     switch (status) {
-      case 'success': return '#10b981'
-      case 'pending': return '#f59e0b'
-      case 'failed': return '#ef4444'
-      default: return '#6b7280'
+      case 'completed':
+        return <CheckCircle className="w-4 h-4 text-emerald-400" />
+      case 'pending':
+        return <Clock className="w-4 h-4 text-orange-400" />
+      case 'failed':
+        return <AlertCircle className="w-4 h-4 text-red-400" />
+      default:
+        return null
+    }
+  }
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'text-emerald-400 bg-emerald-500/10'
+      case 'pending':
+        return 'text-orange-400 bg-orange-500/10'
+      case 'failed':
+        return 'text-red-400 bg-red-500/10'
+      default:
+        return 'text-slate-400 bg-slate-500/10'
     }
   }
 
   return (
-    <div className="payment-processor">
-      <div className="section-header">
-        <h2>Process Payments</h2>
-        <div className="toggle-container">
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={useNaturalLanguage}
-              onChange={(e) => setUseNaturalLanguage(e.target.checked)}
-            />
-            <span className="toggle-slider"></span>
-            Natural Language
-          </label>
-        </div>
-      </div>
-
-      <div className="payment-form-container">
-        <form onSubmit={processPayment} className="payment-form">
-          <div className="form-group">
-            <label>Select Agent</label>
-            <select
-              value={selectedAgent}
-              onChange={(e) => setSelectedAgent(e.target.value)}
-              required
-            >
-              <option value="">Choose an agent...</option>
-              {agents.map(agent => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name} ({agent.id.slice(0, 8)}...)
-                </option>
-              ))}
-            </select>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-2">Payment Processor</h1>
+            <p className="text-slate-400">Send payments and manage transactions</p>
           </div>
+        </div>
 
-          {useNaturalLanguage ? (
-            <div className="form-group">
-              <label>Payment Instruction</label>
-              <textarea
-                value={paymentForm.naturalLanguage}
-                onChange={(e) => setPaymentForm({...paymentForm, naturalLanguage: e.target.value})}
-                placeholder="e.g., Send 1.5 STX to SP3RECIPIENT for hosting services"
-                rows="3"
-                required
-              />
-              <small>Describe the payment in natural language. The AI will parse the details.</small>
-            </div>
-          ) : (
-            <>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Amount (microSTX)</label>
-                  <input
-                    type="number"
-                    value={paymentForm.amount}
-                    onChange={(e) => setPaymentForm({...paymentForm, amount: e.target.value})}
-                    placeholder="1500000"
-                    min="1"
-                    required
-                  />
-                  <small>{paymentForm.amount ? (paymentForm.amount / 1000000).toFixed(6) + ' STX' : ''}</small>
-                </div>
-                <div className="form-group">
-                  <label>Recipient Address</label>
-                  <input
-                    type="text"
-                    value={paymentForm.recipient}
-                    onChange={(e) => setPaymentForm({...paymentForm, recipient: e.target.value})}
-                    placeholder="ST..."
-                    required
-                  />
-                </div>
-              </div>
-              <div className="form-group">
-                <label>Memo (Optional)</label>
-                <input
-                  type="text"
-                  value={paymentForm.memo}
-                  onChange={(e) => setPaymentForm({...paymentForm, memo: e.target.value})}
-                  placeholder="Payment description"
-                />
-              </div>
-            </>
-          )}
-
-          <button type="submit" disabled={loading || !contractsReady} className="btn btn-primary btn-large">
-            {loading ? 'Processing...' : (isSignedIn() ? (contractsReady ? 'Process Payment' : 'Loading…') : 'Connect Wallet to Pay')}
-          </button>
-          {lastSigningPayload && (
-            <>
-              <button
-                type="button"
-                className="btn btn-secondary btn-large"
-                onClick={async () => {
-                  try {
-                    const hasWallet = typeof window !== 'undefined' && (window.StacksProvider || window.LeatherProvider)
-                    if (!hasWallet) {
-                      const proceed = confirm('No Stacks wallet detected. Install Leather and try again?')
-                      if (proceed) window.open('https://leather.io/','_blank')
-                      return
-                    }
-                    await signExecutePayment(lastSigningPayload, {
-                      onFinish: (data) => {
-                        console.log('Wallet submitted tx:', data)
-                        setLastSigningPayload(null)
-                      },
-                      onCancel: () => {
-                        console.warn('User cancelled wallet signing')
-                      }
-                    })
-                  } catch (err) {
-                    console.error('Wallet signing failed:', err)
-                    alert('Wallet signing failed: ' + (err?.message || String(err)))
-                  }
-                }}
-                style={{ marginLeft: '12px' }}
-              >
-                Open Wallet to Sign
-              </button>
-              {!window.StacksProvider && !window.LeatherProvider && (
-                <span style={{ marginLeft: 12, color: '#ef4444' }}>
-                  Wallet not detected
-                </span>
+        {/* Transaction toast banner */}
+        {txInfo.status && (
+          <div className={`flex items-start justify-between p-4 rounded-xl border ${
+            txInfo.status === 'success' ? 'bg-emerald-500/10 border-emerald-500/30' :
+            txInfo.status === 'failed' || txInfo.status === 'error' ? 'bg-red-500/10 border-red-500/30' :
+            txInfo.status === 'submitted' || txInfo.status === 'pending' ? 'bg-blue-500/10 border-blue-500/30' :
+            'bg-slate-700/30 border-slate-600'
+          }`}>
+            <div className="space-y-1">
+              <p className="text-white font-medium capitalize">{txInfo.status.replace('-', ' ')}</p>
+              {txInfo.txId && (
+                <a
+                  className="text-blue-400 hover:text-blue-300 text-sm underline"
+                  href={`${EXPLORER_BASE}${txInfo.txId}?chain=testnet`}
+                  target="_blank" rel="noreferrer"
+                >
+                  View on Explorer
+                </a>
               )}
-            </>
-          )}
-        </form>
-      </div>
-
-      <div className="payments-section">
-        <div className="section-header">
-          <h3>Recent Payments</h3>
-          <button onClick={loadPayments} className="btn btn-sm">
-            Refresh
-          </button>
-        </div>
-        
-        <div className="payments-list">
-          {payments.map(payment => (
-            <div key={payment.id} className="payment-item">
-              <div className="payment-main">
-                <div className="payment-amount">
-                  {(payment.amount / 1000000).toFixed(6)} STX
-                </div>
-                <div className="payment-details">
-                  <div className="payment-recipient">
-                    To: {payment.recipient?.slice(0, 12)}...
-                  </div>
-                  <div className="payment-memo">
-                    {payment.memo || 'No memo'}
-                  </div>
-                  <div className="payment-time">
-                    {new Date(payment.createdAt).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-              <div className="payment-status">
-                <div 
-                  className="status-dot"
-                  style={{ backgroundColor: getStatusColor(payment.status) }}
-                ></div>
-                <span className="status-text">{payment.status}</span>
-                {payment.txId && (
-                  <a 
-                    href={`https://explorer.stacks.co/txid/${payment.txId}?chain=testnet`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-sm explorer-btn"
-                  >
-                    🔍 Explorer
-                  </a>
-                )}
-              </div>
+              {txInfo.error && (
+                <p className="text-red-300 text-sm">{txInfo.error}</p>
+              )}
             </div>
-          ))}
-        </div>
-
-        {payments.length === 0 && (
-          <div className="empty-state">
-            <div className="empty-icon">💸</div>
-            <h3>No payments yet</h3>
-            <p>Process your first payment to see it here</p>
+            <button onClick={dismissToast} className="text-slate-400 hover:text-white">×</button>
           </div>
         )}
+
+        {/* Stats Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <DollarSign className="w-5 h-5 text-blue-400" />
+              <span className="text-slate-400 text-sm font-medium">Total Sent</span>
+            </div>
+            <p className="text-2xl font-bold text-white">1,250 STX</p>
+          </div>
+          
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Send className="w-5 h-5 text-emerald-400" />
+              <span className="text-slate-400 text-sm font-medium">Transactions</span>
+            </div>
+            <p className="text-2xl font-bold text-emerald-400">47</p>
+          </div>
+          
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Users className="w-5 h-5 text-purple-400" />
+              <span className="text-slate-400 text-sm font-medium">Recipients</span>
+            </div>
+            <p className="text-2xl font-bold text-purple-400">23</p>
+          </div>
+          
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <TrendingUp className="w-5 h-5 text-orange-400" />
+              <span className="text-slate-400 text-sm font-medium">Success Rate</span>
+            </div>
+            <p className="text-2xl font-bold text-orange-400">94.7%</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Payment Form */}
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <CreditCard className="w-6 h-6 text-blue-400" />
+              <h2 className="text-xl font-semibold text-white">Send Payment</h2>
+            </div>
+
+            {/* Mode Toggle */}
+            <div className="flex bg-slate-700/30 rounded-xl p-1 mb-6">
+              <button
+                onClick={() => setPaymentMode('structured')}
+                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  paymentMode === 'structured'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Structured Form
+              </button>
+              <button
+                onClick={() => setPaymentMode('natural')}
+                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  paymentMode === 'natural'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Natural Language
+              </button>
+            </div>
+
+            {paymentMode === 'structured' ? (
+              <form onSubmit={handleStructuredSubmit} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Recipient Address *</label>
+                  <input
+                    type="text"
+                    value={formData.recipient}
+                    onChange={(e) => setFormData({ ...formData, recipient: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Amount (STX) *</label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="100"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Memo (Optional)</label>
+                  <input
+                    type="text"
+                    value={formData.memo}
+                    onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Payment description"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={processing}
+                  className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-blue-500/25 font-semibold disabled:cursor-not-allowed"
+                >
+                  {processing ? 'Processing...' : 'Send Payment'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleNaturalLanguageSubmit} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Describe your payment</label>
+                  <textarea
+                    value={naturalLanguageInput}
+                    onChange={(e) => setNaturalLanguageInput(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                    placeholder="Send 100 STX to Alice for the consulting work"
+                    rows={4}
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={processing}
+                  className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-blue-500/25 font-semibold disabled:cursor-not-allowed"
+                >
+                  {processing ? 'Processing...' : 'Process Payment'}
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* Recent Payments */}
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6">
+            <h2 className="text-xl font-semibold text-white mb-6">Recent Payments</h2>
+            
+            <div className="space-y-4">
+              {recentPayments.map(payment => (
+                <div key={payment.id} className="bg-slate-700/30 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      {getStatusIcon(payment.status)}
+                      <span className="text-white font-medium">{payment.amount}</span>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(payment.status)}`}>
+                      {payment.status}
+                    </span>
+                  </div>
+                  
+                  <p className="text-slate-400 text-sm mb-1">
+                    To: {payment.recipient.slice(0, 8)}...{payment.recipient.slice(-8)}
+                  </p>
+                  
+                  {payment.memo && (
+                    <p className="text-slate-300 text-sm mb-2">{payment.memo}</p>
+                  )}
+                  
+                  <p className="text-slate-500 text-xs">{payment.timestamp}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

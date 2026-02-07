@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-secondary {
+    @apply px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+  }
+  
+  .input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+  }
+}
+
+/* Light theme overrides */
+[data-theme='light'] body {
+  background-color: #ffffff;
+  color: #111827; /* gray-900 */
+}
+
+/* Sidebar and header backgrounds that use bg-secondary */
+[data-theme='light'] .bg-secondary {
+  background-color: #ffffff !important;
+}
+
+/* Common white-based utility overrides for light mode */
+[data-theme='light'] .text-white { color: #111827 !important; }
+[data-theme='light'] .text-white\/60 { color: rgba(17,24,39,0.6) !important; }
+[data-theme='light'] .text-white\/70 { color: rgba(17,24,39,0.7) !important; }
+[data-theme='light'] .text-white\/80 { color: rgba(17,24,39,0.8) !important; }
+
+[data-theme='light'] .border-white\/10 { border-color: rgba(0,0,0,0.08) !important; }
+[data-theme='light'] .bg-white\/10 { background-color: rgba(0,0,0,0.06) !important; }
+[data-theme='light'] .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,0.06) !important; }
+[data-theme='light'] .hover\:bg-white\/15:hover { background-color: rgba(0,0,0,0.08) !important; }
+
+/* Selected nav item that used text-brand on dark can stay, but ensure contrast */
+[data-theme='light'] .text-brand { color: #e07b00 !important; }
+
+/* Cards already use white backgrounds; ensure card text colors are readable */
+[data-theme='light'] .card { color: #111827; }
+
+/* Helpers for chatbot and buttons */
+.glow-orange {
+  transition: transform 150ms ease, box-shadow 200ms ease;
+}
+.glow-orange:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 3px rgba(255, 213, 128, 0.35), 0 10px 22px rgba(0,0,0,0.25);
+}
+
+.chat-shell:focus-within {
+  animation: pulseGlow 900ms ease-out;
+}
+
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 0 0 rgba(247,147,26,0.0); }
+  50% { box-shadow: 0 0 0 6px rgba(255,213,128,0.25); }
+  100% { box-shadow: 0 0 0 0 rgba(247,147,26,0.0); }
+}
+
+/* Theme-aware chat input placeholder */
+.chat-input::placeholder {
+  color: rgba(255,255,255,0.85);
+}
+[data-theme='light'] .chat-input {
+  color: #111827 !important; /* ensure readable input text in light mode */
+}
+[data-theme='light'] .chat-input::placeholder {
+  color: rgba(17,24,39,0.6);
+}
+
+/* Animated gradient for Landing hero */
+.hero-gradient {
+  background: linear-gradient(
+    120deg,
+    rgba(247,147,26,0.75) 0%,
+    rgba(255,213,128,0.75) 25%,
+    rgba(255,255,255,0.15) 50%,
+    rgba(255,213,128,0.75) 75%,
+    rgba(247,147,26,0.75) 100%
+  );
+  background-size: 200% 200%;
+  animation: gradientShift 12s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Generic spin animation used by orbit elements on Landing */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
